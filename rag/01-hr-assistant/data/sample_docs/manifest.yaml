@@ -1,0 +1,24 @@
+# Access control and metadata for the sample HR documents.
+# A PDF that is NOT listed here must NOT be ingested (default-deny).
+documents:
+  - file: leave-policy-2026.pdf
+    title: Leave Policy 2026
+    allowed_groups: [employee]
+
+  - file: code-of-conduct.pdf
+    title: Code of Conduct
+    allowed_groups: [employee]
+
+  - file: work-from-home-policy.pdf
+    title: Work From Home Policy
+    allowed_groups: [employee]
+
+  - file: salary-bands-2026.pdf
+    title: Salary Bands 2026
+    allowed_groups: [manager, hr]
+
+  - file: performance-review-guide.pdf
+    title: Performance Review Guide for Managers
+    allowed_groups: [manager]
+
+# draft-travel-policy.pdf is deliberately NOT listed.
