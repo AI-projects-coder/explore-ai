@@ -39,7 +39,8 @@ class Manifest(BaseModel):
 
 class LocalManifestLoader:
     """Loads documents from a local folder; manifest.yaml supplies titles and access groups."""
-
+    source_type = "pdf"
+    uri_prefix = "local://"
     def __init__(self, root: Path) -> None:
         self.root = root
 

@@ -36,3 +36,17 @@ class ParsedDocument:
 
 class Parser(Protocol):
     def parse(self, data: bytes, filename: str) -> ParsedDocument: ...
+
+
+@dataclass(frozen=True)
+class ChunkDraft:
+    """A chunk ready to be embedded and stored (everything except the vector)."""
+
+    chunk_index: int
+    heading_path: str
+    content: str        # what the LLM reads and what citations show
+    embed_text: str     # what gets embedded: heading path + content
+    content_hash: str   # sha256(embed_text): changes exactly when re-embedding is needed
+    page_start: int
+    page_end: int
+    token_count: int
