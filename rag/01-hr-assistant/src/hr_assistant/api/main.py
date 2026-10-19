@@ -8,8 +8,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from hr_assistant.generation.answer import AnswerService, NoAnswerMessages
 
+from hr_assistant.api.middleware import request_context
 from hr_assistant.api.routes import router
 from hr_assistant.core.config import get_settings
+from hr_assistant.core.logs import configure_logging
 from hr_assistant.db.session import get_async_engine, get_async_session_factory
 from hr_assistant.embeddings.vertex import VertexEmbedder
 from hr_assistant.generation.answer import AnswerService
@@ -24,7 +26,8 @@ async def check_embedding_model(session_factory: async_sessionmaker[AsyncSession
     async with session_factory() as session:
         indexed = set((await session.scalars(text("SELECT DISTINCT embedding_model FROM chunks"))).all())
     if not indexed:
-        logger.warning("the index is empty: every question will get the no-answer message")
+        logger.warning("the index is empty: every question will get the no-answer message",
+                       extra={"event": "index_empty"})
     elif configured not in indexed:
         raise RuntimeError(f"EMBEDDING_MODEL={configured!r} but the index was built with {sorted(indexed)}")
 
@@ -52,15 +55,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             no_context=settings.no_context_message,
         ),
     )
-    logger.info("started: environment=%s dev_auth=%s", settings.environment, settings.dev_auth_enabled)
+    logger.info("API started", extra={"event": "api_started", "environment": settings.environment,
+                                       "dev_auth": settings.dev_auth_enabled})
     yield
     await get_async_engine().dispose()
 
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    logging.getLogger("httpx").setLevel(logging.WARNING)
     is_prod = settings.environment == "prod"
     app = FastAPI(
         title="HR Policy Assistant",
@@ -70,8 +72,17 @@ def create_app() -> FastAPI:
         redoc_url=None,
         openapi_url=None if is_prod else "/openapi.json",
     )
+    app.middleware("http")(request_context)
     app.include_router(router)
     return app
 
 
-app = create_app()
+def _create_server_app() -> FastAPI:
+    """The process entry point uvicorn loads: configure logging once, then build the app.
+    (Tests call create_app() directly, so they keep pytest's own log capture.)"""
+    settings = get_settings()
+    configure_logging(json_logs=settings.json_logs, level=settings.log_level)
+    return create_app()
+
+
+app = _create_server_app()

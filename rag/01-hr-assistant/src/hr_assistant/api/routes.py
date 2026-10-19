@@ -35,7 +35,7 @@ async def readyz(request: Request) -> dict[str, str]:
         async with request.app.state.session_factory() as session:
             await session.execute(text("SELECT 1"))
     except Exception:
-        logger.exception("readiness check failed")
+        logger.exception("readiness check failed", extra={"event": "readiness_failed"})
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "database unavailable") from None
     return {"status": "ready"}
 
@@ -68,7 +68,8 @@ async def ask(
             headers={"Retry-After": str(exc.retry_after)},
         ) from None
     except BudgetExhausted:
-        logger.error("daily token budget exhausted: /ask is paused until the budget resets")
+        logger.error("daily token budget exhausted: /ask is paused until it resets",
+                     extra={"event": "token_budget_exhausted"})
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "The assistant is temporarily unavailable. Please try again later."
         ) from None
@@ -76,7 +77,7 @@ async def ask(
     try:
         answer = await service.answer(body.question, user)
     except (errors.APIError, httpx.HTTPError):
-        logger.exception("upstream AI service failed for user=%s", user.id)
+        logger.exception("upstream AI service failed", extra={"event": "upstream_ai_error"})
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "The assistant is temporarily unavailable. Please try again."
         ) from None

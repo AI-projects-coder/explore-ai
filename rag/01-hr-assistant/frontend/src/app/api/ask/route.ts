@@ -1,5 +1,5 @@
 // POST /api/ask -> forward the question to FastAPI as the logged-in user.
-import { backendFetch, errorResponse } from "@/lib/server/api";
+import { backendFetch, errorResponse, newRequestId } from "@/lib/server/api";
 import { clearToken, getToken, isSameOrigin } from "@/lib/server/session";
 
 export async function POST(request: Request) {
@@ -11,12 +11,18 @@ export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
   const question = typeof body?.question === "string" ? body.question : "";
 
+  const requestId = newRequestId();
   let res: Response;
   try {
     // Only the question is forwarded: who the user is comes from the token, never from the browser.
-    res = await backendFetch("/ask", { method: "POST", token, body: JSON.stringify({ question }) });
+    res = await backendFetch("/ask", {
+      method: "POST",
+      token,
+      body: JSON.stringify({ question }),
+      headers: { "x-request-id": requestId },
+    });
   } catch {
-    return errorResponse(503, "The assistant is not reachable right now. Please try again.");
+    return errorResponse(503, "The assistant is not reachable right now. Please try again.", requestId);
   }
 
   if (res.status === 401) {
@@ -35,6 +41,6 @@ export async function POST(request: Request) {
       : "tomorrow"; // the daily limit: resets at midnight (India time)
     return errorResponse(429, `You've asked a lot of questions. Please try again in ${wait}.`);
   }
-  if (!res.ok) return errorResponse(503, "The assistant is temporarily unavailable. Please try again.");
+  if (!res.ok) return errorResponse(503, "The assistant is temporarily unavailable. Please try again.", requestId);
   return Response.json(await res.json());
 }

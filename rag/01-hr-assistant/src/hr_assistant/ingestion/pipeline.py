@@ -60,7 +60,8 @@ def _run_ingestion_locked(
     with session_factory.begin() as session:
         run = IngestionRun(trigger=trigger)
         session.add(run)
-    logger.info("ingestion run %s started (trigger=%s)", run.id, trigger)
+    logger.info("ingestion run started", extra={"event": "ingestion_started", "run_id": str(run.id),
+                                                "trigger": trigger, "scope": loader.uri_prefix})
 
     stats = RunStats()
     status, error = RunStatus.SUCCEEDED, None
@@ -72,7 +73,8 @@ def _run_ingestion_locked(
             try:
                 _ingest_one(source, parser, embedder, session_factory, settings, stats)
             except Exception as exc:  # one bad document must not stop the others
-                logger.exception("failed to ingest %s", source.source_uri)
+                logger.exception("failed to ingest %s", source.source_uri,
+                                 extra={"event": "ingestion_document_failed", "source_uri": source.source_uri})
                 stats.failed += 1
                 stats.failures[source.source_uri] = repr(exc)
 
@@ -87,7 +89,7 @@ def _run_ingestion_locked(
             status = RunStatus.FAILED
     except MassDeletionError as exc:
         status, error = RunStatus.ABORTED, str(exc)
-        logger.error("run aborted: %s", exc)
+        logger.error("ingestion run aborted: %s", exc, extra={"event": "ingestion_aborted"})
     except Exception as exc:
         status, error = RunStatus.FAILED, repr(exc)
         raise
@@ -101,7 +103,13 @@ def _run_ingestion_locked(
             run.docs_unchanged, run.docs_deleted, run.docs_failed = stats.unchanged, stats.deleted, stats.failed
             run.embed_tokens = stats.embed_tokens
             run.details = asdict(stats)
-        logger.info("ingestion run %s finished: %s", run.id, status)
+        logger.info(
+            "ingestion run finished: %s",
+            status,
+            extra={"event": "ingestion_finished", "run_id": str(run.id), "status": str(status), "new": stats.new,
+                   "changed": stats.changed, "deleted": stats.deleted, "failed": stats.failed,
+                   "embed_tokens": stats.embed_tokens},
+        )
     return run
 
 
@@ -236,7 +244,8 @@ def run_ingestion(
                     details=asdict(RunStats()),
                 )
                 session.add(run)
-            logger.warning("ingestion skipped: %s", run.error)
+            logger.warning("ingestion skipped: %s", run.error,
+                           extra={"event": "ingestion_skipped", "scope": loader.uri_prefix})
             return run
         return _run_ingestion_locked(
             loader=loader,

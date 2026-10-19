@@ -1,4 +1,5 @@
 """Gemini on Vertex AI, returning a validated structured answer."""
+import logging
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
@@ -8,6 +9,8 @@ from pydantic import BaseModel
 
 from hr_assistant.core.config import Settings
 from hr_assistant.core.retry import google_api_retry
+
+logger = logging.getLogger(__name__)
 
 
 class LLMAnswer(BaseModel):
@@ -82,6 +85,15 @@ class GeminiLLM:
         )
         usage = response.usage_metadata
         parsed = response.parsed if isinstance(response.parsed, LLMAnswer) else None
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate is not None and candidate.finish_reason == types.FinishReason.MAX_TOKENS:
+            # Thinking tokens count toward max_output_tokens: the JSON was cut off. Safe (it becomes a
+            # no-answer) but silent for users, so this is the line to alert on.
+            logger.warning(
+                "LLM output truncated at max_output_tokens",
+                extra={"event": "llm_truncated", "model": self.model, "max_output_tokens": self._max_output_tokens,
+                       "thoughts_tokens": usage.thoughts_token_count if usage else None},
+            )
         return LLMResult(
             parsed=parsed,
             input_tokens=(usage.prompt_token_count or 0) if usage else 0,

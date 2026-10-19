@@ -76,7 +76,8 @@ async def check_and_count(
             per_minute = (await session.execute(_COUNT_REQUEST, minute_row)).scalar_one()
             per_day = (await session.execute(_COUNT_REQUEST, day_row)).scalar_one()
     except SQLAlchemyError:
-        logger.exception("usage limits unavailable: allowing the request for user=%s (fail-open)", user.id)
+        logger.exception("usage limits unavailable: allowing the request (fail-open)",
+                         extra={"event": "usage_fail_open"})
         return
 
     if per_minute > settings.rate_limit_per_minute:
@@ -103,13 +104,14 @@ async def record_tokens(
             org_row = {"key": ORG_KEY, "start": day_start, "tokens": tokens}
             org_total = (await session.execute(_ADD_TOKENS, org_row)).scalar_one()
     except Exception:
-        logger.exception("could not record token usage for user=%s", user.id)
+        logger.exception("could not record token usage", extra={"event": "usage_record_failed"})
         return
     threshold = settings.token_budget_alert_fraction * settings.daily_token_budget
     if org_total - tokens < threshold <= org_total:  # log once, at the moment the threshold is crossed
         logger.warning(
-            "daily token budget %.0f%% used: %d of %d tokens",
-            100 * settings.token_budget_alert_fraction, org_total, settings.daily_token_budget,
+            "daily token budget %.0f%% used",
+            100 * settings.token_budget_alert_fraction,
+            extra={"event": "token_budget_alert", "tokens_today": org_total, "budget": settings.daily_token_budget},
         )
 
 

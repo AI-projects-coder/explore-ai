@@ -17,7 +17,15 @@ export async function backendFetch(path: string, init: RequestInit & { token?: s
   });
 }
 
-/** A JSON error the browser can show, without leaking backend internals. */
-export function errorResponse(status: number, message: string): Response {
-  return Response.json({ error: message }, { status });
+/** One id per browser request, sent to FastAPI as X-Request-ID: every backend log line of it carries this id. */
+export function newRequestId(): string {
+  return crypto.randomUUID();
+}
+
+/**
+ * A JSON error the browser can show, without leaking backend internals. With a request id, the user also
+ * sees a short reference code to quote to support, which engineers can search for in the logs.
+ */
+export function errorResponse(status: number, message: string, requestId?: string): Response {
+  return Response.json({ error: message, reference: requestId?.slice(0, 8) }, { status });
 }

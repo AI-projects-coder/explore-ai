@@ -1,8 +1,8 @@
 import argparse
-import logging
 from pathlib import Path
 
 from hr_assistant.core.config import get_settings
+from hr_assistant.core.logs import configure_logging
 from hr_assistant.db.models import RunStatus, RunTrigger
 from hr_assistant.db.session import get_session_factory
 from hr_assistant.embeddings.vertex import VertexEmbedder
@@ -21,9 +21,8 @@ def main(argv: list[str] | None = None) -> int:
     ingest.add_argument("--allow-mass-delete", action="store_true", help="skip the mass-deletion safety check")
 
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-
     settings = get_settings()
+    configure_logging(json_logs=settings.json_logs, level=settings.log_level)
     run = run_ingestion(
         loader=LocalManifestLoader(args.path),
         parser=DoclingParser(),

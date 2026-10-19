@@ -126,17 +126,21 @@ class AnswerService:
             latency_ms=self._ms(started),
         )
         logger.info(
-            "answer no_answer reason=%s tokens_in=%d tokens_out=%d ms=%d",
-            reason, input_tokens, output_tokens, answer.latency_ms,
+            "no answer: %s",
+            reason,
+            extra={"event": "answer", "answerable": False, "reason": reason, "tokens_in": input_tokens,
+                   "tokens_out": output_tokens, "duration_ms": answer.latency_ms},
         )
         return answer
 
     @staticmethod
     def _log(user: User, answer: Answer, n_chunks: int) -> None:
         logger.info(
-            "answer user=%s chunks=%d cited=%s tokens_in=%d tokens_out=%d ms=%d",
-            user.id, n_chunks, [c.number for c in answer.citations],
-            answer.input_tokens, answer.output_tokens, answer.latency_ms,
+            "answered with %d citations",
+            len(answer.citations),
+            extra={"event": "answer", "answerable": True, "chunks": n_chunks,
+                   "cited": [c.number for c in answer.citations], "tokens_in": answer.input_tokens,
+                   "tokens_out": answer.output_tokens, "duration_ms": answer.latency_ms},
         )
 
     @staticmethod

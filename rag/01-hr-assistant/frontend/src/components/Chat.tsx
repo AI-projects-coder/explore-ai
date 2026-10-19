@@ -30,7 +30,7 @@ const SUGGESTIONS: Record<string, string[]> = {
 type NewTurn =
   | { kind: "question"; text: string }
   | { kind: "answer"; answer: AskResponse }
-  | { kind: "error"; text: string; question: string };
+  | { kind: "error"; text: string; question: string; reference?: string };
 type Turn = NewTurn & { id: number };
 
 export function Chat({
@@ -71,10 +71,13 @@ export function Chat({
       });
       const data = await res.json().catch(() => ({}));
       if (res.status === 401) return onSessionExpired();
-      if (!res.ok) throw new Error(data.error ?? "Something went wrong. Please try again.");
+      if (!res.ok) {
+        add({ kind: "error", text: data.error ?? "Something went wrong. Please try again.", question: q, reference: data.reference });
+        return;
+      }
       add({ kind: "answer", answer: data as AskResponse });
-    } catch (e) {
-      add({ kind: "error", text: e instanceof Error ? e.message : "Something went wrong.", question: q });
+    } catch {
+      add({ kind: "error", text: "Something went wrong. Please check your connection and try again.", question: q });
     } finally {
       setLoading(false);
     }
@@ -138,6 +141,7 @@ export function Chat({
             ) : (
               <div key={t.id} className="max-w-[92%] rounded-xl bg-danger-soft px-4 py-3 text-sm text-danger" role="alert">
                 <p>{t.text}</p>
+                {t.reference && <p className="mt-1 font-mono text-xs opacity-80">Reference: {t.reference}</p>}
                 <button type="button" onClick={() => ask(t.question)} className="mt-2 font-medium underline">
                   Try again
                 </button>

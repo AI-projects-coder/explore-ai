@@ -38,7 +38,7 @@ async def save_interaction(
             await session.flush()  # assigns row.id
             return row.id
     except Exception:
-        logger.exception("could not save interaction for user=%s", user.id)
+        logger.exception("could not save interaction", extra={"event": "interaction_save_failed"})
         return None
 
 

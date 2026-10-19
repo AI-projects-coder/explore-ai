@@ -79,6 +79,14 @@ class Settings(BaseSettings):
     token_budget_alert_fraction: float = Field(default=0.8, gt=0, le=1)
     usage_timezone: str = "Asia/Kolkata"  # the "day" resets at midnight in this time zone
 
+    # Logging: JSON lines everywhere except a developer's laptop (unless LOG_FORMAT says otherwise)
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    log_format: Literal["text", "json"] | None = None
+
+    @property
+    def json_logs(self) -> bool:
+        return self.log_format == "json" if self.log_format else self.environment != "local"
+
     def daily_limit_for(self, groups: frozenset[str]) -> int:
         """The most generous limit among the user's groups (e.g. hr staff answer questions all day)."""
         overrides = [self.rate_limit_per_day_by_group[g] for g in groups if g in self.rate_limit_per_day_by_group]

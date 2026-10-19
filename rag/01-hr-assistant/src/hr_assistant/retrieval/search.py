@@ -100,12 +100,15 @@ class Retriever:
         )
         kept = [c for c in results if c.score >= self._min_score]
         logger.info(
-            "retrieval user=%s groups=%s results=%d kept=%d top_score=%.3f ms=%.0f",
-            user.id,
-            sorted(user.groups),
-            len(results),
+            "retrieved %d chunks",
             len(kept),
-            results[0].score if results else 0.0,
-            (time.perf_counter() - started) * 1000,
+            extra={
+                "event": "retrieval",
+                "groups": sorted(user.groups),
+                "results": len(results),
+                "kept": len(kept),
+                "top_score": round(results[0].score, 3) if results else None,
+                "duration_ms": round((time.perf_counter() - started) * 1000),
+            },
         )
         return kept
