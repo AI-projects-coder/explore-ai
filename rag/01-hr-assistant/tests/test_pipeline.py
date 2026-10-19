@@ -8,8 +8,9 @@ import uuid
 from dataclasses import dataclass, field
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
 from hr_assistant.core.config import get_settings
 from hr_assistant.db.models import EMBEDDING_DIM, Chunk, Document, RunStatus
@@ -247,3 +248,84 @@ def test_one_broken_document_does_not_stop_the_others(env):
     assert (run.docs_new, run.docs_failed) == (2, 1)  # ...but the good documents were still ingested
     assert "corrupt PDF" in run.details["failures"][f"{p}broken.pdf"]
     assert env.document(f"{p}broken.pdf") is None
+
+
+# ---------------------------------------------------------------- one run per source at a time (advisory lock)
+
+
+def _lock_engine(database: str):
+    # NullPool: close() really closes the connection. With a normal pool, close() only returns it to the
+    # pool and a session-level advisory lock taken on it would STAY HELD. (The pitfall ingestion_lock avoids.)
+    return create_engine(database, poolclass=NullPool)
+
+
+def _hold_lock(engine, prefix: str):
+    """Simulate another ingestion run (e.g. another container) holding the lock for this source."""
+    conn = engine.connect()
+    assert conn.execute(text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": f"ingest:{prefix}"}).scalar()
+    conn.commit()
+    return conn
+
+
+def _advisory_locks(engine) -> int:
+    with engine.connect() as conn:
+        return conn.execute(text(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'"
+            " AND database = (SELECT oid FROM pg_database WHERE datname = current_database())"
+        )).scalar()
+
+
+def test_run_is_skipped_while_another_run_holds_the_lock(env, database):
+    engine = _lock_engine(database)
+    p = env.loader.uri_prefix
+    env.loader.sources = [source(p, "leave.pdf", POLICY_V1)]
+    other_run = _hold_lock(engine, p)
+    try:
+        run = env.run()
+    finally:
+        other_run.close()  # closing the connection releases the lock, like a finished (or crashed) process
+
+    assert run.status == RunStatus.ABORTED
+    assert "already in progress" in run.error
+    assert env.embedder.texts_embedded == []  # no duplicate, paid work
+    assert env.document(f"{p}leave.pdf") is None
+
+    assert env.run().status == RunStatus.SUCCEEDED  # once the other run is gone, the next one works
+    engine.dispose()
+
+
+def test_lock_is_released_after_a_normal_run(env, database):
+    engine = _lock_engine(database)
+    env.loader.sources = [source(env.loader.uri_prefix, "leave.pdf", POLICY_V1)]
+
+    env.run()
+
+    assert _advisory_locks(engine) == 0
+    engine.dispose()
+
+
+def test_lock_is_released_even_if_the_run_crashes(env, database):
+    engine = _lock_engine(database)
+
+    def broken_listing():
+        raise RuntimeError("source unreachable")
+
+    env.loader.load = broken_listing
+    with pytest.raises(RuntimeError):
+        env.run()
+
+    assert _advisory_locks(engine) == 0  # a crash must never block future runs
+    engine.dispose()
+
+
+def test_different_sources_do_not_block_each_other(env, database):
+    engine = _lock_engine(database)
+    env.loader.sources = [source(env.loader.uri_prefix, "leave.pdf", POLICY_V1)]
+    other_source = _hold_lock(engine, "gs://some-other-bucket/")
+    try:
+        run = env.run()
+    finally:
+        other_source.close()
+
+    assert run.status == RunStatus.SUCCEEDED  # the lock is per source (uri_prefix), not global
+    engine.dispose()

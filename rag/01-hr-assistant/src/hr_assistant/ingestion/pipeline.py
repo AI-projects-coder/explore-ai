@@ -13,6 +13,10 @@ from hr_assistant.embeddings.vertex import Embedder
 from hr_assistant.ingestion import writer
 from hr_assistant.ingestion.chunker import chunk_document
 from hr_assistant.ingestion.models import Parser, SourceDocument
+from collections.abc import Iterator
+from contextlib import contextmanager
+
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +47,7 @@ class RunStats:
     failures: dict[str, str] = field(default_factory=dict)
 
 
-def run_ingestion(
+def _run_ingestion_locked(
     *,
     loader: Loader,
     parser: Parser,
@@ -188,3 +192,58 @@ def _ingest_one(
         len(to_embed),
         len(drafts) - len(to_embed),
     )
+
+
+@contextmanager
+def ingestion_lock(session_factory: sessionmaker[Session], scope: str) -> Iterator[bool]:
+    """Only one run per source scope at a time. Yields False (immediately) if another run holds the lock.
+
+    A Postgres SESSION-level advisory lock, held on ONE dedicated connection for the whole run:
+    - if the process crashes, the connection closes and Postgres releases the lock by itself;
+    - we commit right after taking it, so no transaction stays open during the slow work (VACUUM-friendly).
+    """
+    key = f"ingest:{scope}"
+    engine = session_factory.kw["bind"]  # the sessionmaker's engine
+    with engine.connect() as conn:  # a dedicated connection: NOT shared via a Session/pool between commits
+        acquired = bool(conn.execute(text("SELECT pg_try_advisory_lock(hashtext(:key))"), {"key": key}).scalar())
+        conn.commit()
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                conn.execute(text("SELECT pg_advisory_unlock(hashtext(:key))"), {"key": key})
+                conn.commit()
+
+
+def run_ingestion(
+    *,
+    loader: Loader,
+    parser: Parser,
+    embedder: Embedder,
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    trigger: str,
+    allow_mass_delete: bool = False,
+) -> IngestionRun:
+    with ingestion_lock(session_factory, loader.uri_prefix) as acquired:
+        if not acquired:
+            with session_factory.begin() as session:
+                run = IngestionRun(
+                    trigger=trigger,
+                    status=RunStatus.ABORTED,
+                    finished_at=datetime.now(UTC),
+                    error=f"another ingestion run for {loader.uri_prefix} is already in progress",
+                    details=asdict(RunStats()),
+                )
+                session.add(run)
+            logger.warning("ingestion skipped: %s", run.error)
+            return run
+        return _run_ingestion_locked(
+            loader=loader,
+            parser=parser,
+            embedder=embedder,
+            session_factory=session_factory,
+            settings=settings,
+            trigger=trigger,
+            allow_mass_delete=allow_mass_delete,
+        )
