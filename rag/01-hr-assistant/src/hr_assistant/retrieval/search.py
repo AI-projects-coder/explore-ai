@@ -25,9 +25,12 @@ _SEARCH_SQL = text("""
 """)
 
 # set_config(name, value, is_local=true) is SET LOCAL, but accepts bind parameters (no string formatting).
+# plan_cache_mode: psycopg prepares a statement after 5 runs on a connection, and Postgres may then use a
+# GENERIC plan that doesn't know the query vector and skips the HNSW index (load test: 4 ms -> 190 ms).
 _SEARCH_SETTINGS_SQL = text("""
     SELECT set_config('hnsw.iterative_scan', 'relaxed_order', true),
-           set_config('hnsw.ef_search', :ef_search, true)
+           set_config('hnsw.ef_search', :ef_search, true),
+           set_config('plan_cache_mode', 'force_custom_plan', true)
 """)
 
 
