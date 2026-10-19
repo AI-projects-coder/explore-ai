@@ -31,6 +31,9 @@ class RunTrigger(enum.StrEnum):
     SCHEDULE = "schedule"
     MANUAL = "manual"
 
+class FeedbackRating(enum.StrEnum):
+    UP = "up"
+    DOWN = "down"
 
 class RunStatus(enum.StrEnum):
     RUNNING = "running"
@@ -148,4 +151,55 @@ class IngestionRun(Base):
     error: Mapped[str | None] = mapped_column(Text)
     details: Mapped[dict] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+
+class Interaction(Base):
+    """One question and its answer: the production log behind dashboards, feedback and new eval cases.
+
+    Contains personal data (what employees ask HR), so it needs a retention policy and restricted access.
+    """
+
+    __tablename__ = "interactions"
+    __table_args__ = (Index("ix_interactions_created_at", "created_at"),)  # retention deletes, dashboards
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    answerable: Mapped[bool] = mapped_column(nullable=False)
+    no_answer_reason: Mapped[str | None] = mapped_column(Text)
+    citations: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class Feedback(Base):
+    """A user's thumbs up/down on one of THEIR OWN interactions. One rating per interaction per user."""
+
+    __tablename__ = "feedback"
+    __table_args__ = (
+        UniqueConstraint("interaction_id", "user_id"),
+        CheckConstraint(_sql_in("rating", FeedbackRating), name="rating"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    interaction_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("interactions.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    rating: Mapped[str] = mapped_column(Text, nullable=False)
+    comment: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

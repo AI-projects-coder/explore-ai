@@ -10,8 +10,9 @@ import pytest
 from google.genai import errors
 from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr, ValidationError
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from hr_assistant.api.deps import get_answer_service
+from hr_assistant.api.deps import get_answer_service, get_session_factory
 from hr_assistant.api.main import check_embedding_model, create_app
 from hr_assistant.core.auth import DEV_USERS, InvalidTokenError, User, issue_token, verify_token
 from hr_assistant.core.config import Settings, get_settings
@@ -41,12 +42,15 @@ def fake_service() -> FakeAnswerService:
 
 
 @pytest.fixture
-async def client(fake_service):
+async def client(fake_service, database):
     app = create_app()
+    engine = create_async_engine(database)
     app.dependency_overrides[get_answer_service] = lambda: fake_service
+    app.dependency_overrides[get_session_factory] = lambda: async_sessionmaker(engine, expire_on_commit=False)
     # ASGITransport calls the app in-process; the lifespan (Vertex, DB checks) is NOT run.
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
+    await engine.dispose()
 
 
 def bearer(user_id: str, settings: Settings) -> dict[str, str]:
@@ -241,12 +245,11 @@ async def test_response_contains_only_public_fields(client, fake_service, settin
 
     response = await client.post("/ask", json={"question": "casual?"}, headers=bearer("intern_ravi", settings))
 
-    assert response.json() == {
-        "answer": "Up to 4 days [1].",
-        "answerable": True,
-        "citations": [{"number": 1, "title": "Leave Policy 2026",
-                       "section": "3. Leave Entitlements > 3.1 Casual Leave", "pages": "pp. 1-2"}],
-    }  # no tokens, no latency, no document_id, no reason
+    body = response.json()
+    assert set(body) == {"answer", "answerable", "citations", "interaction_id"}  # nothing internal
+    assert body["citations"] == [{"number": 1, "title": "Leave Policy 2026",
+                                  "section": "3. Leave Entitlements > 3.1 Casual Leave", "pages": "pp. 1-2"}]
+    # no tokens, no latency, no document_id, no no_answer_reason
 
 
 async def test_no_answer_hides_the_reason(client, fake_service, settings):
@@ -254,7 +257,9 @@ async def test_no_answer_hides_the_reason(client, fake_service, settings):
 
     response = await client.post("/ask", json={"question": "L4 salary?"}, headers=bearer("intern_ravi", settings))
 
-    assert response.json() == {"answer": "Not found.", "answerable": False, "citations": []}
+    body = response.json()
+    assert (body["answer"], body["answerable"], body["citations"]) == ("Not found.", False, [])
+    assert "no_answer_reason" not in body
 
 
 # ---------------------------------------------------------------- upstream failures

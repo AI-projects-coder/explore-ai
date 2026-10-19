@@ -2,6 +2,9 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from hr_assistant.generation.answer import Answer, Citation
+import uuid
+from typing import Literal
+
 
 MAX_QUESTION_CHARS = 1000
 
@@ -30,13 +33,15 @@ class AskResponse(BaseModel):
     answer: str
     answerable: bool
     citations: list[CitationOut]
+    interaction_id: uuid.UUID | None = None  # None if logging failed: the UI then hides feedback buttons
 
     @classmethod
-    def from_answer(cls, answer: Answer) -> "AskResponse":
+    def from_answer(cls, answer: Answer, interaction_id: uuid.UUID | None = None) -> "AskResponse":
         return cls(
             answer=answer.text,
             answerable=answer.answerable,
             citations=[_citation_out(c) for c in answer.citations],
+            interaction_id=interaction_id,
         )
 
 
@@ -60,3 +65,10 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int  # seconds
+
+class FeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    interaction_id: uuid.UUID
+    rating: Literal["up", "down"]
+    comment: str | None = Field(default=None, max_length=1000)

@@ -5,6 +5,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from hr_assistant.core.auth import InvalidTokenError, User, verify_token
 from hr_assistant.core.config import Settings, get_settings
 from hr_assistant.generation.answer import AnswerService
+from collections.abc import AsyncIterator
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -29,3 +31,13 @@ def get_current_user(
 
 def get_answer_service(request: Request) -> AnswerService:
     return request.app.state.answer_service
+
+def get_session_factory(request: Request) -> async_sessionmaker[AsyncSession]:
+    return request.app.state.session_factory
+
+
+async def get_db_session(
+    factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
+) -> AsyncIterator[AsyncSession]:
+    async with factory() as session:  # one session per request, closed afterwards
+        yield session

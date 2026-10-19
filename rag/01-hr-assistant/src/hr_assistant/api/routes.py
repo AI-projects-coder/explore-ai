@@ -10,6 +10,12 @@ from hr_assistant.api.schemas import AskRequest, AskResponse, DevTokenRequest, T
 from hr_assistant.core.auth import DEV_USERS, User, issue_token
 from hr_assistant.core.config import Settings, get_settings
 from hr_assistant.generation.answer import AnswerService
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from hr_assistant.api.deps import get_answer_service, get_current_user, get_db_session, get_session_factory
+from hr_assistant.api.schemas import AskRequest, AskResponse, DevTokenRequest, FeedbackRequest, TokenResponse
+from hr_assistant.db.interactions import save_feedback, save_interaction
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -49,6 +55,7 @@ async def ask(
     body: AskRequest,
     user: User = Depends(get_current_user),
     service: AnswerService = Depends(get_answer_service),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
 ) -> AskResponse:
     try:
         answer = await service.answer(body.question, user)
@@ -57,4 +64,16 @@ async def ask(
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "The assistant is temporarily unavailable. Please try again."
         ) from None
-    return AskResponse.from_answer(answer)
+    interaction_id = await save_interaction(session_factory, user, body.question, answer)
+    return AskResponse.from_answer(answer, interaction_id)
+
+@router.post("/feedback", status_code=status.HTTP_204_NO_CONTENT)
+async def feedback(
+    body: FeedbackRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> Response:
+    if not await save_feedback(session, user, body.interaction_id, body.rating, body.comment):
+        # Same 404 for "doesn't exist" and "not yours": never confirm that someone else's id exists.
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not Found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
