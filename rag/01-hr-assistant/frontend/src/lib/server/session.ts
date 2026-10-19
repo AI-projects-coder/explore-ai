@@ -48,5 +48,11 @@ export function userFromToken(token: string): SessionUser | null {
 /** Second CSRF layer (after sameSite): state-changing requests must come from our own pages. */
 export function isSameOrigin(request: Request): boolean {
   const origin = request.headers.get("origin");
-  return origin !== null && origin === new URL(request.url).origin;
+  if (!origin) return false;
+  // The PUBLIC address the browser used. Behind Docker or Cloud Run, request.url holds the container's
+  // internal address (e.g. http://0.0.0.0:8080), so it can't be compared with what the browser sends.
+  const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  const proto = request.headers.get("x-forwarded-proto") ?? new URL(request.url).protocol.replace(":", "");
+  const expected = process.env.APP_ORIGIN ?? `${proto}://${host}`;
+  return origin === expected;
 }

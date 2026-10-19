@@ -19,6 +19,53 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+    # ---- the full stack, from the images you'll deploy: docker compose --profile stack up -d
+  migrate:
+    image: hr-worker
+    profiles: ["stack", "jobs"]   # both need the schema to be up to date first
+    entrypoint: ["alembic", "upgrade", "head"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://hr:hr@db:5432/hr_assistant   # "db" + 5432 INSIDE the network
+    depends_on:
+      db: { condition: service_healthy }
+
+  api:
+    image: hr-api
+    profiles: ["stack"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://hr:hr@db:5432/hr_assistant
+      GOOGLE_APPLICATION_CREDENTIALS: /gcp/adc.json                 # your gcloud login, read-only
+    volumes:
+      - ${HOME}/.config/gcloud/application_default_credentials.json:/gcp/adc.json:ro
+    ports: ["8001:8080"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  web:
+    image: hr-web
+    profiles: ["stack"]
+    environment:
+      API_BASE_URL: http://api:8080
+      APP_ORIGIN: http://localhost:3001
+    ports: ["3001:8080"]
+    depends_on: [api]
+
+  ingest:
+    image: hr-worker
+    profiles: ["jobs"]                                                # only when you ask for it
+    command: ["ingest", "/data/sample_docs"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://hr:hr@db:5432/hr_assistant
+      GOOGLE_APPLICATION_CREDENTIALS: /gcp/adc.json
+    volumes:
+      - ./data:/data:ro
+      - ${HOME}/.config/gcloud/application_default_credentials.json:/gcp/adc.json:ro
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
 
 volumes:
   pgdata:                               

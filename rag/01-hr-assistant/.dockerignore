@@ -1,0 +1,14 @@
+# Only what the images need goes into the build context: smaller, faster, and no secrets.
+.venv
+**/__pycache__
+.pytest_cache
+.env
+.env.*
+!.env.example
+data
+evals
+tests
+scripts
+frontend
+*.md
+!README.md

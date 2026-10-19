@@ -9,10 +9,8 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.0",
-    "docling>=2.140.0",
     "fastapi>=0.146.0",
     "google-genai>=2.31.0",
-    "jwt>=1.4.0",
     "pgvector>=0.5.1",
     "psycopg[binary]>=3.3.6",
     "pydantic-settings>=2.16.0",
@@ -26,17 +24,39 @@ dependencies = [
 [project.scripts]
 hr-assistant = "hr_assistant.cli:main"
 
+[project.optional-dependencies]
+ingest = [
+    "docling>=2.140.0",
+    "torch>=2.14.1",
+    "torchvision>=0.29.1",
+]
+
 [build-system]
 requires = ["uv_build>=0.12.1,<0.13.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "docling>=2.140.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "torch>=2.14.1",
+    "torchvision>=0.29.1",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+
+# On Linux (Cloud Run), take torch from PyTorch's CPU-only index: the default Linux wheels bundle CUDA,
+# gigabytes of GPU libraries that are useless on CPU-only machines. macOS keeps the normal wheels.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
