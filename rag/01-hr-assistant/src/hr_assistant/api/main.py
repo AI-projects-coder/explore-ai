@@ -63,6 +63,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    if settings.jwt_secret is None:
+        raise RuntimeError("JWT_SECRET is required to run the API")
+
     is_prod = settings.environment == "prod"
     app = FastAPI(
         title="HR Policy Assistant",

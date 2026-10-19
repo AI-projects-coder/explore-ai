@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     # API and authentication
     environment: Literal["local", "dev", "prod"] = "local"
-    jwt_secret: SecretStr = Field(min_length=32)
+    jwt_secret: SecretStr | None = Field(default=None, min_length=32)  # required by the API only (see main.py)
     jwt_issuer: str = "hr-assistant"
     jwt_ttl_minutes: int = Field(default=30, gt=0, le=24 * 60)
 
@@ -109,7 +109,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _no_placeholder_secret_outside_local(self) -> "Settings":
-        if self.environment != "local" and "change-me" in self.jwt_secret.get_secret_value():
+        if self.environment != "local"  and self.jwt_secret is not None and "change-me" in self.jwt_secret.get_secret_value():
             raise ValueError("JWT_SECRET is still the example placeholder; set a real secret")
         return self
 
