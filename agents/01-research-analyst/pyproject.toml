@@ -1,0 +1,35 @@
+[project]
+name = "research-analyst"
+version = "0.1.0"
+description = "Autonomous financial research analyst (LangGraph + Gemini)"
+readme = "README.md"
+authors = [
+    { name = "AI-projects-coder", email = "manikantakondapalli9498@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "google-genai>=2.31.0",
+    "httpx>=0.28.1",
+    "langgraph>=1.2.16",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.0",
+    "tenacity>=9.1.4",
+]
+
+[project.scripts]
+research-analyst = "research_analyst.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
