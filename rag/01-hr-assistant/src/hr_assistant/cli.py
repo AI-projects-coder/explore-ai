@@ -4,6 +4,7 @@ from pathlib import Path
 from hr_assistant.core.config import get_settings
 from hr_assistant.core.logs import configure_logging
 from hr_assistant.db.models import RunStatus, RunTrigger
+from hr_assistant.db.retention import count_expired, purge_expired
 from hr_assistant.db.session import get_session_factory
 from hr_assistant.embeddings.vertex import VertexEmbedder
 from hr_assistant.ingestion.docling_parser import DoclingParser
@@ -20,9 +21,19 @@ def main(argv: list[str] | None = None) -> int:
     ingest.add_argument("--trigger", choices=[t.value for t in RunTrigger], default=RunTrigger.MANUAL.value)
     ingest.add_argument("--allow-mass-delete", action="store_true", help="skip the mass-deletion safety check")
 
+    cleanup = commands.add_parser("cleanup", help="delete data older than the retention periods")
+    cleanup.add_argument("--dry-run", action="store_true", help="only count what would be deleted")
+
     args = parser.parse_args(argv)
     settings = get_settings()
     configure_logging(json_logs=settings.json_logs, level=settings.log_level)
+    if args.command == "cleanup":
+        if args.dry_run:
+            print(f"would delete: {count_expired(get_session_factory(), settings)}")
+        else:
+            print(f"deleted: {purge_expired(get_session_factory(), settings)}")
+        return 0
+
     run = run_ingestion(
         loader=LocalManifestLoader(args.path),
         parser=DoclingParser(),

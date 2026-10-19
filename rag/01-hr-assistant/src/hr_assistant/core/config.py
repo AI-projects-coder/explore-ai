@@ -79,6 +79,10 @@ class Settings(BaseSettings):
     token_budget_alert_fraction: float = Field(default=0.8, gt=0, le=1)
     usage_timezone: str = "Asia/Kolkata"  # the "day" resets at midnight in this time zone
 
+    # Data retention (personal data must not be kept longer than needed)
+    interaction_retention_days: int = Field(default=90, ge=1)  # ge=1: a typo can never mean "delete all"
+    usage_counter_retention_days: int = Field(default=2, ge=1)
+
     # Logging: JSON lines everywhere except a developer's laptop (unless LOG_FORMAT says otherwise)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     log_format: Literal["text", "json"] | None = None
