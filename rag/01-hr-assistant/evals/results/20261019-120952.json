@@ -1,0 +1,166 @@
+{
+  "run_at": "2026-10-19T06:39:52.989849+00:00",
+  "config": {
+    "llm_model": "gemini-3.5-flash",
+    "thinking": "low",
+    "temperature": 0.0,
+    "embedding_model": "gemini-embedding-001",
+    "task_types": true,
+    "top_k": 5,
+    "min_score": 0.0,
+    "chunk_max_tokens": 400,
+    "chunk_min_tokens": 50,
+    "judge": "gemini-3.1-pro-preview"
+  },
+  "summary": {
+    "cases": 2,
+    "passed": 1,
+    "pass_rate": 0.5,
+    "must_pass_failures": [],
+    "known_issues_failing": [
+      "hometown-not-abroad"
+    ],
+    "unexpected_failures": [],
+    "leaks": [],
+    "outcome_accuracy": 1.0,
+    "retrieval_recall": 1.0,
+    "faithfulness": 1.0,
+    "judged": 2,
+    "judge_agrees_with_rules": "2/2",
+    "failures_by_layer": {
+      "answer": 1
+    },
+    "by_category": {
+      "multi_part": "1/1",
+      "trap": "0/1"
+    },
+    "tokens_in": 2453,
+    "tokens_out": 620,
+    "avg_latency_ms": 2854,
+    "elapsed_s": 40.6
+  },
+  "results": [
+    {
+      "id": "hometown-not-abroad",
+      "category": "trap",
+      "tier": "quality",
+      "user": "intern_ravi",
+      "question": "Can I work from my hometown in Kerala for three weeks?",
+      "passed": false,
+      "failures": [
+        "answer: missing 'already used|remaining|left this year|balance|not used'"
+      ],
+      "expected_outcome": "answered",
+      "actual_outcome": "answered",
+      "no_answer_reason": null,
+      "answer": "Yes, if you are a confirmed employee (as employees on probation must work from the office full time) [3], you can work from another city in India for up to 30 days a year with your manager's approval [1]. Since Kerala is in India and three weeks is under the 30-day limit, this is permitted under those conditions [1][3].",
+      "retrieved": [
+        "Work From Home Policy (0.728)",
+        "Work From Home Policy (0.700)",
+        "Work From Home Policy (0.664)",
+        "Leave Policy 2026 > 2. Scope (0.640)",
+        "Leave Policy 2026 (0.636)"
+      ],
+      "top_score": 0.7279620540238338,
+      "input_tokens": 1178,
+      "output_tokens": 270,
+      "latency_ms": 3073,
+      "faithful": true,
+      "unsupported_claims": [],
+      "judge_facts_stated": false,
+      "judge_claims": [
+        {
+          "claim": "If you are a confirmed employee, you can work from another city in India for up to 30 days a year with your manager's approval.",
+          "supported": true,
+          "excerpt": 1,
+          "reason": "Excerpt 1 states employees can work from another city in India for up to 30 days a year with manager approval, and Excerpt 3 states all confirmed employees are eligible for the remote work policy."
+        },
+        {
+          "claim": "Employees on probation must work from the office full time.",
+          "supported": true,
+          "excerpt": 3,
+          "reason": "Excerpt 3 explicitly states that employees on probation work from the office full time."
+        },
+        {
+          "claim": "Kerala is in India.",
+          "supported": true,
+          "excerpt": null,
+          "reason": "This is basic, uncontroversial world knowledge used to apply the policy."
+        },
+        {
+          "claim": "Three weeks is under the 30-day limit.",
+          "supported": true,
+          "excerpt": null,
+          "reason": "This is simple arithmetic (3 weeks = 21 days, which is less than 30) used to apply the policy."
+        },
+        {
+          "claim": "Working from Kerala for three weeks is permitted under the stated conditions.",
+          "supported": true,
+          "excerpt": 1,
+          "reason": "This follows directly from the policy in Excerpt 1 and the basic facts established."
+        }
+      ],
+      "known_issue": true
+    },
+    {
+      "id": "rating-1-consequences",
+      "category": "multi_part",
+      "tier": "quality",
+      "user": "manager_priya",
+      "question": "One of my reports got a rating of 1. What happens to them, and what increment do they get?",
+      "passed": true,
+      "failures": [],
+      "expected_outcome": "answered",
+      "actual_outcome": "answered",
+      "no_answer_reason": null,
+      "answer": "An employee rated 1 is placed on a 60-day performance improvement plan with documented, measurable goals, which requires the HR business partner to be involved from the start and the manager to hold check-ins every two weeks [1]. Additionally, managers must bring written evidence for a rating of 1 to the calibration meeting [5]. Regarding their salary, an employee with a rating of 1 receives no annual increment [3].",
+      "retrieved": [
+        "Performance Review Guide for Managers (0.671)",
+        "Performance Review Guide for Managers > 2. Rating Scale (0.625)",
+        "Salary Bands 2026 > 3. Annual Increment Guidelines (0.615)",
+        "Performance Review Guide for Managers > 3. Rating Distribution Guideline (0.609)",
+        "Performance Review Guide for Managers > 4. Calibration (0.596)"
+      ],
+      "top_score": 0.6710007536948395,
+      "input_tokens": 1275,
+      "output_tokens": 350,
+      "latency_ms": 2636,
+      "faithful": true,
+      "unsupported_claims": [],
+      "judge_facts_stated": true,
+      "judge_claims": [
+        {
+          "claim": "An employee rated 1 is placed on a 60-day performance improvement plan with documented, measurable goals.",
+          "supported": true,
+          "excerpt": 1,
+          "reason": "Excerpt 1 states that an employee rated 1 is placed on a 60-day performance improvement plan with documented, measurable goals."
+        },
+        {
+          "claim": "The performance improvement plan requires the HR business partner to be involved from the start.",
+          "supported": true,
+          "excerpt": 1,
+          "reason": "Excerpt 1 states that the HR business partner must be involved from the start."
+        },
+        {
+          "claim": "The manager must hold check-ins with the employee every two weeks.",
+          "supported": true,
+          "excerpt": 1,
+          "reason": "Excerpt 1 states that the manager holds a check-in with the employee every two weeks."
+        },
+        {
+          "claim": "Managers must bring written evidence for a rating of 1 to the calibration meeting.",
+          "supported": true,
+          "excerpt": 5,
+          "reason": "Excerpt 5 states that managers must bring written evidence for every rating of 5, 2 or 1 to the calibration meeting."
+        },
+        {
+          "claim": "An employee with a rating of 1 receives no annual increment.",
+          "supported": true,
+          "excerpt": 3,
+          "reason": "Excerpt 3 states that a performance rating of 1 results in 'No increment'."
+        }
+      ],
+      "known_issue": false
+    }
+  ]
+}

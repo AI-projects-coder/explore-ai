@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/* Design tokens: every color the UI uses is defined here once, for light and dark mode. */
+:root {
+  --background: #f6f6f3;
+  --surface: #ffffff;
+  --surface-muted: #efefea;
+  --border: #e2e2dc;
+  --foreground: #1d1d1b;
+  --muted: #6a6a64;
+  --accent: #2f6b5b;
+  --accent-foreground: #ffffff;
+  --accent-soft: #e4efea;
+  --notice: #7a5414;
+  --notice-soft: #f8f0df;
+  --danger: #a8281e;
+  --danger-soft: #fbe9e7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #141413;
+    --surface: #1d1d1b;
+    --surface-muted: #262624;
+    --border: #34342f;
+    --foreground: #ececea;
+    --muted: #9c9c95;
+    --accent: #7fc4ae;
+    --accent-foreground: #10221c;
+    --accent-soft: #1f322b;
+    --notice: #e5bd74;
+    --notice-soft: #33291a;
+    --danger: #f19d93;
+    --danger-soft: #3a1f1c;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-notice: var(--notice);
+  --color-notice-soft: var(--notice-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}

@@ -1,0 +1,90 @@
+{
+  "run_at": "2026-10-19T06:08:29.773396+00:00",
+  "config": {
+    "llm_model": "gemini-3.5-flash",
+    "thinking": "low",
+    "temperature": 0.0,
+    "embedding_model": "gemini-embedding-001",
+    "task_types": true,
+    "top_k": 5,
+    "min_score": 0.0,
+    "chunk_max_tokens": 400,
+    "chunk_min_tokens": 50,
+    "judge": "gemini-3.1-pro-preview"
+  },
+  "summary": {
+    "cases": 1,
+    "passed": 1,
+    "pass_rate": 1.0,
+    "must_pass_failures": [],
+    "leaks": [],
+    "outcome_accuracy": 1.0,
+    "retrieval_recall": 1.0,
+    "faithfulness": 1.0,
+    "judged": 1,
+    "judge_agrees_with_rules": "1/1",
+    "failures_by_layer": {},
+    "by_category": {
+      "multi_part": "1/1"
+    },
+    "tokens_in": 1163,
+    "tokens_out": 69,
+    "avg_latency_ms": 2951,
+    "elapsed_s": 13.9
+  },
+  "results": [
+    {
+      "id": "rating-1-consequences",
+      "category": "multi_part",
+      "tier": "quality",
+      "user": "manager_priya",
+      "question": "One of my reports got a rating of 1. What happens to them, and what increment do they get?",
+      "passed": true,
+      "failures": [],
+      "expected_outcome": "answered",
+      "actual_outcome": "answered",
+      "no_answer_reason": null,
+      "answer": "An employee rated 1 is placed on a 60-day performance improvement plan with documented, measurable goals, which involves the HR business partner from the start and bi-weekly check-ins with the manager [1]. Additionally, they receive no annual increment [3].",
+      "retrieved": [
+        "Performance Review Guide for Managers (0.671)",
+        "Performance Review Guide for Managers > 2. Rating Scale (0.625)",
+        "Salary Bands 2026 > 3. Annual Increment Guidelines (0.615)",
+        "Performance Review Guide for Managers > 3. Rating Distribution Guideline (0.609)",
+        "Performance Review Guide for Managers > 4. Calibration (0.596)"
+      ],
+      "top_score": 0.6710007536948395,
+      "input_tokens": 1163,
+      "output_tokens": 69,
+      "latency_ms": 2951,
+      "faithful": true,
+      "unsupported_claims": [],
+      "judge_facts_stated": true,
+      "judge_claims": [
+        {
+          "claim": "An employee rated 1 is placed on a 60-day performance improvement plan with documented, measurable goals.",
+          "supported": true,
+          "excerpt": 1,
+          "reason": "Excerpt 1 explicitly states that an employee rated 1 is placed on a 60-day performance improvement plan with documented, measurable goals."
+        },
+        {
+          "claim": "The performance improvement plan involves the HR business partner from the start.",
+          "supported": true,
+          "excerpt": 1,
+          "reason": "Excerpt 1 states that the HR business partner must be involved from the start."
+        },
+        {
+          "claim": "The performance improvement plan involves bi-weekly check-ins with the manager.",
+          "supported": true,
+          "excerpt": 1,
+          "reason": "Excerpt 1 states that the manager holds a check-in with the employee every two weeks, which is equivalent to bi-weekly."
+        },
+        {
+          "claim": "Employees rated 1 receive no annual increment.",
+          "supported": true,
+          "excerpt": 3,
+          "reason": "Excerpt 3 shows that the increment range for a performance rating of 1 is 'No increment'."
+        }
+      ]
+    }
+  ]
+}

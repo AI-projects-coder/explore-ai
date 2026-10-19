@@ -54,6 +54,8 @@ def validate(parsed: LLMAnswer | None, n_chunks: int) -> str | None:
         return "off_topic"
     if parsed.status == "not_found":
         return "not_found"
+    if not parsed.answer.strip():
+        return "empty_answer"
     cited = set(parsed.citations) | cited_numbers(parsed.answer)
     if not cited:
         return "no_citations"
