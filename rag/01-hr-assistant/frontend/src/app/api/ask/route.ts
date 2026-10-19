@@ -24,6 +24,17 @@ export async function POST(request: Request) {
     return errorResponse(401, "Your session has expired. Please log in again.");
   }
   if (res.status === 422) return errorResponse(422, "Please enter a question of up to 1,000 characters.");
+  if (res.status === 429) {
+    const seconds = Number(res.headers.get("retry-after") ?? "60");
+    const minutes = Math.ceil(seconds / 60);
+    const hours = Math.ceil(seconds / 3600);
+    const wait =
+      seconds <= 90 ? "a minute" // the per-minute limit
+      : minutes < 60 ? `${minutes} minutes` // the daily limit, shortly before midnight
+      : hours <= 3 ? `${hours} hour${hours > 1 ? "s" : ""}`
+      : "tomorrow"; // the daily limit: resets at midnight (India time)
+    return errorResponse(429, `You've asked a lot of questions. Please try again in ${wait}.`);
+  }
   if (!res.ok) return errorResponse(503, "The assistant is temporarily unavailable. Please try again.");
   return Response.json(await res.json());
 }

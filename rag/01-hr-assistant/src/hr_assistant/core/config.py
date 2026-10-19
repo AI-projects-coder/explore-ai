@@ -1,7 +1,8 @@
 from functools import lru_cache
 from typing import Literal
+from zoneinfo import ZoneInfo
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -70,10 +71,29 @@ class Settings(BaseSettings):
     jwt_issuer: str = "hr-assistant"
     jwt_ttl_minutes: int = Field(default=30, gt=0, le=24 * 60)
 
+    # Usage limits (layers 1 and 2: per user, in questions; layer 3: whole company, in tokens)
+    rate_limit_per_minute: int = Field(default=10, gt=0)
+    rate_limit_per_day: int = Field(default=50, gt=0)
+    rate_limit_per_day_by_group: dict[str, int] = {"hr": 200}
+    daily_token_budget: int = Field(default=5_000_000, gt=0)
+    token_budget_alert_fraction: float = Field(default=0.8, gt=0, le=1)
+    usage_timezone: str = "Asia/Kolkata"  # the "day" resets at midnight in this time zone
+
+    def daily_limit_for(self, groups: frozenset[str]) -> int:
+        """The most generous limit among the user's groups (e.g. hr staff answer questions all day)."""
+        overrides = [self.rate_limit_per_day_by_group[g] for g in groups if g in self.rate_limit_per_day_by_group]
+        return max([self.rate_limit_per_day, *overrides])
+
     @property
     def dev_auth_enabled(self) -> bool:
         """The dev login exists only on a developer's machine, by construction."""
         return self.environment == "local"
+
+    @field_validator("usage_timezone")
+    @classmethod
+    def _valid_timezone(cls, v: str) -> str:
+        ZoneInfo(v)  # raises for an unknown zone, so a typo fails at startup
+        return v
 
     @model_validator(mode="after")
     def _no_placeholder_secret_outside_local(self) -> "Settings":

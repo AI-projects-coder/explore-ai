@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from hr_assistant.api.deps import get_answer_service, get_current_user, get_db_session, get_session_factory
 from hr_assistant.api.schemas import AskRequest, AskResponse, DevTokenRequest, FeedbackRequest, TokenResponse
 from hr_assistant.db.interactions import save_feedback, save_interaction
+from hr_assistant.db.usage import BudgetExhausted, LimitExceeded, check_and_count, record_tokens
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -56,7 +57,22 @@ async def ask(
     user: User = Depends(get_current_user),
     service: AnswerService = Depends(get_answer_service),
     session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
+    settings: Settings = Depends(get_settings),
 ) -> AskResponse:
+    try:
+        await check_and_count(session_factory, user, settings)  # before ANY paid call
+    except LimitExceeded as exc:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "You have asked a lot of questions in a short time. Please try again later.",
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from None
+    except BudgetExhausted:
+        logger.error("daily token budget exhausted: /ask is paused until the budget resets")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "The assistant is temporarily unavailable. Please try again later."
+        ) from None
+
     try:
         answer = await service.answer(body.question, user)
     except (errors.APIError, httpx.HTTPError):
@@ -64,6 +80,7 @@ async def ask(
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "The assistant is temporarily unavailable. Please try again."
         ) from None
+    await record_tokens(session_factory, user, answer.input_tokens + answer.output_tokens, settings)
     interaction_id = await save_interaction(session_factory, user, body.question, answer)
     return AskResponse.from_answer(answer, interaction_id)
 

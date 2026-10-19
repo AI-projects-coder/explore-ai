@@ -12,6 +12,9 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ.setdefault("GCP_PROJECT", "test-project")  # tests never call GCP; just satisfies Settings
 os.environ["JWT_SECRET"] = "test-only-secret-not-used-anywhere-else-0123456789"
 os.environ["ENVIRONMENT"] = "local"
+# High limits for the suite in general; tests about limits set their own small ones.
+os.environ["RATE_LIMIT_PER_MINUTE"] = "100000"
+os.environ["RATE_LIMIT_PER_DAY"] = "100000"
 
 from pathlib import Path  # noqa: E402
 

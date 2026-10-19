@@ -4,6 +4,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint, DateTime, ForeignKey, Index, Integer, Text,
     UniqueConstraint, func, text,
 )
@@ -34,6 +35,11 @@ class RunTrigger(enum.StrEnum):
 class FeedbackRating(enum.StrEnum):
     UP = "up"
     DOWN = "down"
+
+class UsagePeriod(enum.StrEnum):
+    MINUTE = "minute"
+    DAY = "day"
+
 
 class RunStatus(enum.StrEnum):
     RUNNING = "running"
@@ -203,3 +209,16 @@ class Feedback(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class UsageCounter(Base):
+    """Request and token counters per key ("user:<id>" or "org") and time window. Old rows can be deleted."""
+
+    __tablename__ = "usage_counters"
+    __table_args__ = (CheckConstraint(_sql_in("period", UsagePeriod), name="period"),)
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    period: Mapped[str] = mapped_column(Text, primary_key=True)  # not "window": that's a reserved word in SQL
+    window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    requests: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    tokens: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("0"))
