@@ -1,0 +1,22 @@
+# Local Postgres for Agent #1: LangGraph checkpoints + our runs table.
+# Its own container and port (5434), so it never touches RAG #1's database (5433).
+services:
+  db:
+    image: postgres:17
+    container_name: research-analyst-db
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: research_analyst
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d research_analyst"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  pgdata:

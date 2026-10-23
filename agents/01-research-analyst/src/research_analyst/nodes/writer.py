@@ -51,8 +51,9 @@ async def writer(state: AgentState, runtime: Runtime[AgentContext]) -> dict:
             max_output_tokens=ctx.settings.writer_max_output_tokens,
         )
     except LlmError as e:
+        # On a revision, the previous draft stays in the state and goes to the critic again.
         return {"errors": [f"Writing the report failed: {e}"]}
-    return {"report": report}
+    return {"report": report, "critique": None}  # a new draft hasn't been checked yet
 
 
 def _prompt(state: AgentState) -> str:
@@ -63,7 +64,24 @@ def _prompt(state: AgentState) -> str:
         "Metrics table (id | metric | period | value | how it was computed):\n" + _metrics_table(state.get("metrics", {})),
         "Research notes:\n" + "\n\n".join(_finding_text(f) for f in state.get("findings", [])),
         *(["Problems during the run:\n" + "\n".join(f"- {e}" for e in state["errors"])] if state.get("errors") else []),
+        *_revision(state),
     ])
+
+
+def _revision(state: AgentState) -> list[str]:
+    """On a rewrite: the previous draft plus exactly what must change (checker problems, human feedback)."""
+    previous = state.get("report")
+    if previous is None:
+        return []
+    parts = ["This is a REVISION. Rewrite the whole report and fix every point below. All rules still apply.",
+             f"Previous draft:\n# {previous.title}\n{previous.summary}\n{previous.body_markdown}"]
+    critique = state.get("critique")
+    if critique is not None and critique.problems:
+        parts.append("Problems found by the checker:\n" + "\n".join(f"- {p}" for p in critique.problems))
+    if state.get("feedback"):
+        parts.append("Feedback from the human reviewer (most recent last):\n"
+                     + "\n".join(f"- {f}" for f in state["feedback"]))
+    return parts
 
 
 def _metrics_table(metrics: dict) -> str:

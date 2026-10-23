@@ -8,15 +8,18 @@ Two kinds of things live here:
 import operator
 from dataclasses import dataclass
 from datetime import date
-from typing import Annotated, Literal, TypedDict
+from typing import TYPE_CHECKING, Annotated, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from research_analyst.core.config import Settings
-from research_analyst.core.llm import Llm
+from research_analyst.core.llm import Llm, Spend, max_spend
 from research_analyst.finance.metrics import MetricResult
 from research_analyst.tools.edgar import EdgarClient
 from research_analyst.tools.xbrl import QuarterValue, available_metrics
+
+if TYPE_CHECKING:
+    from research_analyst.storage import RunStore
 
 
 class _Frozen(BaseModel):
@@ -148,6 +151,33 @@ class Report(_Frozen):
         return self
 
 
+# --- critic and human review (v1) ------------------------------------------------
+
+class Critique(_Frozen):
+    """The critic's verdict on the current draft."""
+
+    passed: bool
+    problems: list[str] = Field(default_factory=list)  # exact, actionable: sent to the writer as-is
+    fully_checked: bool = True  # False when the qualitative judge couldn't run (budget or LLM failure)
+    send_back: bool = False  # True: the writer gets another try (within critic_max_revisions)
+
+
+class ReviewDecision(_Frozen):
+    """What the human decided at the review pause."""
+
+    action: Literal["approve", "revise", "reject"]
+    feedback: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def _revise_needs_feedback(self) -> "ReviewDecision":
+        if self.action == "revise" and not self.feedback.strip():
+            raise ValueError("a revision needs feedback: what should change?")
+        return self
+
+
+RunStatus = Literal["running", "awaiting_review", "approved", "rejected", "partial", "failed"]
+
+
 # --- graph state ------------------------------------------------------------------
 
 class AgentState(TypedDict, total=False):
@@ -163,6 +193,15 @@ class AgentState(TypedDict, total=False):
     metrics: dict[str, MetricResult]  # "m1" -> result; ids let claims and the critic refer to them
     report: Report
     errors: Annotated[list[str], operator.add]  # problems worth showing the user; never silently lost
+
+    # v1
+    spend: Annotated[Spend, max_spend]  # the run's running total; in the state so a resume can't reset it
+    critique: Critique | None
+    revisions: int  # critic -> writer rewrites in the current review round
+    review_rounds: int  # human "revise" decisions so far
+    feedback: list[str]  # human feedback, oldest first (replaced as a whole list: idempotent)
+    decision: Literal["approved", "rejected"]
+    status: RunStatus  # set by finalize
 
 
 class ResearcherInput(TypedDict):
@@ -181,6 +220,8 @@ class AgentContext:
     settings: Settings
     sec: EdgarClient
     llm: Llm
+    run_id: str = "local"  # the LangGraph thread_id; also the key in the runs table
+    runs: "RunStore | None" = None  # None in tests and one-off runs: finalize then skips the database
 
 
 # Every class that is saved inside a checkpoint. When a checkpoint is loaded, LangGraph rebuilds only
@@ -188,5 +229,6 @@ class AgentContext:
 # checkpoint row from making the app construct arbitrary objects.
 CHECKPOINT_TYPES: list[tuple[str, str]] = [
     (cls.__module__, cls.__name__)
-    for cls in (Plan, ResearchTask, Finding, Source, Report, Claim, QuarterValue, MetricResult)
+    for cls in (Plan, ResearchTask, Finding, Source, Report, Claim, QuarterValue, MetricResult,
+                Spend, Critique, ReviewDecision)
 ]

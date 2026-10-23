@@ -1,16 +1,22 @@
-"""The whole agent as a LangGraph graph, and the CLI on top of it. Fake SEC and fake Gemini: free and offline."""
+"""The v1 graph end to end: review pause, revise loop, critic loop, crash + resume, budget, final status.
+
+Fake SEC and fake Gemini, and LangGraph's in-memory checkpointer (same behaviour as Postgres for
+these purposes; Postgres itself is tested in test_storage.py). Free and offline.
+"""
 
 from datetime import date
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 
-from research_analyst import cli
 from research_analyst.core.config import Settings
-from research_analyst.core.llm import LlmBadOutput
-from research_analyst.graph import build_graph, route_after_planner, run_analysis
+from research_analyst.core.llm import Llm, LlmBadOutput, Spend
+from research_analyst.graph import advance, build_graph, route_after_planner, route_after_writer
+from research_analyst.nodes.critic import Judgement, Verdict
 from research_analyst.nodes.researcher import NewsDigest, NewsEvent
-from research_analyst.state import AgentContext, Claim, Finding, PlanDraft, PlannedTask, Report, Source
-from research_analyst.tools.edgar import SecAccessDenied
+from research_analyst.state import AgentContext, Claim, Critique, PlanDraft, PlannedTask, Report
+from research_analyst.storage import checkpoint_serde
 from tests.test_nodes import FakeSec
 
 SETTINGS = Settings(_env_file=None, gcp_project="p", sec_user_agent="app dev@mycompany.io")
@@ -22,35 +28,75 @@ PLAN = PlanDraft(ticker="AAPL", quarters=2, tasks=[
 DIGEST = NewsDigest(overview="New CEO.", events=[
     NewsEvent(accession="0000320193-26-000018", category="leadership", headline="New CEO", summary="The CEO changed."),
 ])
+ALL_SUPPORTED = Judgement(verdicts=[Verdict(claim=0, supported=True, reason="The notes say so.")])
+
+
+def good_report(kwargs) -> Report:
+    """A report citing a real metric correctly (ids and values taken from the validation context)."""
+    mid, value = next(iter(kwargs["context"]["metric_values"].items()))  # m1 = revenue, $120 in the fake data
+    return Report(title="Apple", summary="Revenue grew.", body_markdown=f"Revenue was ${value:g} [{mid}].",
+                  claims=[Claim(text="Revenue grew", kind="numeric", metric_id=mid, stated_value=value),
+                          Claim(text="Growth was strong", kind="qualitative")])
+
+
+def report_with_uncited_figure(kwargs) -> Report:
+    r = good_report(kwargs)
+    return r.model_copy(update={"summary": "Revenue reached $5.00B this year."})  # no [id]: the critic must catch it
 
 
 class SchemaLlm:
-    """Answers by schema, because parallel researchers call it in no fixed order."""
+    """Answers by schema name (parallel nodes call it in no fixed order). A list is used in order; the last repeats."""
 
-    def __init__(self, answers: dict):
-        self.answers = answers
+    def __init__(self, answers: dict, settings: Settings = SETTINGS):
+        self.answers = {k: (list(v) if isinstance(v, list) else [v]) for k, v in answers.items()}
         self.calls: list[str] = []
+        self.prompts: dict[str, list[str]] = {}
+        self._real = Llm(settings, client=object())  # for spend() / set_baseline
+
+    def spend(self) -> Spend:
+        b = self._real.spend()
+        return b.model_copy(update={"llm_calls": b.llm_calls + len(self.calls)})
+
+    def set_baseline(self, s):
+        self._real.set_baseline(s)
 
     async def structured(self, **kwargs):
-        schema = kwargs["schema"]
-        self.calls.append(schema.__name__)
-        answer = self.answers[schema.__name__]
+        name = kwargs["schema"].__name__
+        self.calls.append(name)
+        self.prompts.setdefault(name, []).append(kwargs["prompt"])
+        script = self.answers[name]
+        answer = script.pop(0) if len(script) > 1 else script[0]
         if callable(answer) and not isinstance(answer, type):
             answer = answer(kwargs)
-        if isinstance(answer, Exception):
+        if isinstance(answer, BaseException):
             raise answer
-        return schema.model_validate(answer.model_dump(), context=kwargs.get("context"))
+        return kwargs["schema"].model_validate(answer.model_dump(), context=kwargs.get("context"))
 
 
-def report_citing_first_metric(kwargs) -> Report:
-    """A report whose one numeric claim cites a real id with the right value (taken from the validation context)."""
-    mid, value = next(iter(kwargs["context"]["metric_values"].items()))
-    return Report(title="Apple", summary="Revenue grew.", body_markdown=f"Revenue grew [{mid}].",
-                  claims=[Claim(text="Revenue grew", kind="numeric", metric_id=mid, stated_value=value)])
+class FakeRuns:
+    def __init__(self):
+        self.finished: dict[str, dict] = {}
+
+    async def finish(self, run_id, **kwargs):
+        self.finished[run_id] = kwargs
 
 
-def context(llm, sec=None) -> AgentContext:
-    return AgentContext(settings=SETTINGS, sec=sec or FakeSec(), llm=llm)
+def answers(**overrides) -> dict:
+    return {"PlanDraft": PLAN, "NewsDigest": DIGEST, "Report": good_report, "Judgement": ALL_SUPPORTED, **overrides}
+
+
+def setup(llm, *, sec=None, settings=SETTINGS, runs=None):
+    graph = build_graph(InMemorySaver(serde=checkpoint_serde()))
+    context = AgentContext(settings=settings, sec=sec or FakeSec(), llm=llm, run_id="run-test", runs=runs)
+    return graph, context
+
+
+async def start(graph, context, request="Analyze Apple"):
+    return await advance(graph, context.run_id, {"request": request}, context)
+
+
+async def decide(graph, context, **decision):
+    return await advance(graph, context.run_id, Command(resume=decision), context)
 
 
 @pytest.fixture(autouse=True)
@@ -62,146 +108,192 @@ def fixed_today(monkeypatch):
     monkeypatch.setattr("research_analyst.nodes.researcher.date", D)
 
 
-# --- the graph -------------------------------------------------------------------------------
+# --- human review -----------------------------------------------------------------------------
 
-async def test_full_run_plan_research_calculate_write():
-    llm = SchemaLlm({"PlanDraft": PLAN, "NewsDigest": DIGEST, "Report": report_citing_first_metric})
-    progress: list[str] = []
-    state = await run_analysis("Analyze Apple", context(llm), on_progress=progress.append)
+async def test_run_pauses_for_review_then_approve_finishes():
+    runs = FakeRuns()
+    graph, ctx = setup(SchemaLlm(answers()), runs=runs)
+    snap = await start(graph, ctx)
+    assert snap.next == ("human_review",) and snap.interrupts      # paused, state saved
+    assert snap.values["critique"].passed
 
-    assert state["plan"].ticker == "AAPL"
-    assert sorted(f.task_id for f in state["findings"]) == ["t1", "t2"]  # both parallel researchers merged
-    assert state["metrics"]                                               # calculator ran after both
-    assert state["report"].title == "Apple"
-    assert sorted(llm.calls) == ["NewsDigest", "PlanDraft", "Report"]     # one LLM call per LLM step
-    assert progress[0].startswith("Plan: Apple Inc. (AAPL)")
-    assert progress[-1] == "Report written"
-
-
-async def test_no_plan_stops_before_research():
-    llm = SchemaLlm({"PlanDraft": PlanDraft(ticker="NONE", quarters=4, tasks=PLAN.tasks)})
-    state = await run_analysis("What's the weather?", context(llm))
-    assert "plan" not in state and "report" not in state
-    assert not state.get("findings")  # keys with a reducer show up as [] even when nothing wrote to them
-    assert "one US-listed public company" in state["errors"][0]
-    assert llm.calls == ["PlanDraft"]  # nothing else was paid for
+    snap = await decide(graph, ctx, action="approve")
+    assert snap.next == () and snap.values["status"] == "approved"
+    assert runs.finished["run-test"]["status"] == "approved"
+    assert runs.finished["run-test"]["report_markdown"].startswith("# Apple")
 
 
-async def test_writer_failure_keeps_everything_else():
-    llm = SchemaLlm({"PlanDraft": PLAN, "NewsDigest": DIGEST, "Report": LlmBadOutput("bad report")})
-    state = await run_analysis("Analyze Apple", context(llm))
-    assert "report" not in state
-    assert state["metrics"] and len(state["findings"]) == 2
-    assert state["errors"][-1].startswith("Writing the report failed")
+async def test_reject_stores_no_report():
+    runs = FakeRuns()
+    graph, ctx = setup(SchemaLlm(answers()), runs=runs)
+    await start(graph, ctx)
+    snap = await decide(graph, ctx, action="reject")
+    assert snap.values["status"] == "rejected"
+    assert runs.finished["run-test"]["report_markdown"] == ""
+
+
+async def test_revise_sends_feedback_to_the_writer_and_pauses_again():
+    llm = SchemaLlm(answers())
+    graph, ctx = setup(llm)
+    await start(graph, ctx)
+    snap = await decide(graph, ctx, action="revise", feedback="Shorter summary please")
+    assert snap.next == ("human_review",)                  # reviewed again after the rewrite
+    assert snap.values["review_rounds"] == 1
+    assert llm.calls.count("Report") == 2
+    assert "Shorter summary please" in llm.prompts["Report"][-1]
+    assert "This is a REVISION" in llm.prompts["Report"][-1]
+
+
+async def test_revision_limit_asks_again_instead_of_looping():
+    graph, ctx = setup(SchemaLlm(answers()), settings=SETTINGS.model_copy(update={"review_max_revisions": 0}))
+    await start(graph, ctx)
+    snap = await decide(graph, ctx, action="revise", feedback="again")
+    assert snap.next == ("human_review",)
+    assert "Revision limit reached" in snap.values["errors"][-1]
+
+
+async def test_invalid_review_answer_asks_again():
+    graph, ctx = setup(SchemaLlm(answers()))
+    await start(graph, ctx)
+    snap = await decide(graph, ctx, action="revise", feedback="   ")  # revise without feedback
+    assert snap.next == ("human_review",)
+    assert "Invalid review decision" in snap.values["errors"][-1]
+
+
+# --- critic loop ---------------------------------------------------------------------------------
+
+async def test_critic_sends_an_uncited_figure_back_and_the_rewrite_passes():
+    llm = SchemaLlm(answers(Report=[report_with_uncited_figure, good_report]))
+    graph, ctx = setup(llm)
+    snap = await start(graph, ctx)
+    assert llm.calls.count("Report") == 2
+    assert snap.values["critique"].passed and snap.values["revisions"] == 1
+    assert "'$5.00B' has no [id]" in llm.prompts["Report"][1]   # the writer got the exact problem
+
+
+async def test_critic_gives_up_after_max_revisions_and_shows_the_human():
+    llm = SchemaLlm(answers(Report=report_with_uncited_figure))  # never fixed
+    graph, ctx = setup(llm)
+    snap = await start(graph, ctx)
+    assert llm.calls.count("Report") == 1 + SETTINGS.critic_max_revisions  # bounded, not forever
+    assert snap.next == ("human_review",)
+    critique: Critique = snap.values["critique"]
+    assert not critique.passed and not critique.send_back
+
+
+async def test_unsupported_judgment_is_sent_back():
+    unsupported = Judgement(verdicts=[Verdict(claim=0, supported=False, reason="Notes don't say this.")])
+    llm = SchemaLlm(answers(Judgement=[unsupported, ALL_SUPPORTED]))
+    graph, ctx = setup(llm)
+    snap = await start(graph, ctx)
+    assert llm.calls.count("Report") == 2
+    assert snap.values["critique"].passed
+
+
+# --- crashes and resume ------------------------------------------------------------------------------
+
+async def test_crash_in_writer_resumes_without_redoing_earlier_steps():
+    sec = FakeSec()
+    calls = {"facts": 0}
+    real_facts = sec.company_facts
+
+    async def counting_facts(cik):
+        calls["facts"] += 1
+        return await real_facts(cik)
+
+    sec.company_facts = counting_facts
+    llm = SchemaLlm(answers(Report=[RuntimeError("worker killed"), good_report]))
+    graph, ctx = setup(llm, sec=sec)
+
+    with pytest.raises(RuntimeError, match="worker killed"):
+        await start(graph, ctx)
+    saved = await graph.aget_state({"configurable": {"thread_id": "run-test"}})
+    assert saved.next == ("writer",)                    # the last finished step was saved
+
+    snap = await advance(graph, "run-test", None, ctx)  # resume: no new input
+    assert snap.next == ("human_review",)
+    assert llm.calls.count("PlanDraft") == 1 and llm.calls.count("NewsDigest") == 1  # not paid for again
+    assert calls["facts"] == 1
+
+
+async def test_crash_of_one_parallel_researcher_reruns_only_that_one():
+    sec = FakeSec()
+    calls = {"facts": 0}
+    real_facts = sec.company_facts
+
+    async def counting_facts(cik):
+        calls["facts"] += 1
+        return await real_facts(cik)
+
+    sec.company_facts = counting_facts
+    llm = SchemaLlm(answers(NewsDigest=[RuntimeError("worker killed"), DIGEST]))
+    graph, ctx = setup(llm, sec=sec)
+    with pytest.raises(RuntimeError):
+        await start(graph, ctx)
+
+    snap = await advance(graph, "run-test", None, ctx)
+    assert snap.next == ("human_review",)
+    assert calls["facts"] == 1  # the financials researcher finished before the crash: its result was kept
+    assert sorted(f.task_id for f in snap.values["findings"]) == ["t1", "t2"]
+
+
+async def test_state_survives_strict_checkpoint_serialization(monkeypatch):
+    monkeypatch.setenv("LANGGRAPH_STRICT_MSGPACK", "true")  # any class missing from CHECKPOINT_TYPES would fail
+    graph, ctx = setup(SchemaLlm(answers()))
+    await start(graph, ctx)
+    values = (await graph.aget_state({"configurable": {"thread_id": "run-test"}})).values
+    assert isinstance(values["critique"], Critique)
+    assert isinstance(values["spend"], Spend)
+
+
+# --- budget and final status ------------------------------------------------------------------------
+
+async def test_writer_out_of_budget_gives_a_partial_data_only_result():
+    from research_analyst.core.llm import BudgetExceeded
+    runs = FakeRuns()
+    graph, ctx = setup(SchemaLlm(answers(Report=BudgetExceeded("LLM call limit reached (2 of 2)"))), runs=runs)
+    snap = await start(graph, ctx)
+    assert snap.next == () and snap.values["status"] == "partial"
+    assert "report" not in snap.values
+    assert runs.finished["run-test"]["report_markdown"].startswith("# Data-only report: Apple Inc. (AAPL)")
+
+
+async def test_not_a_company_ends_as_failed():
+    runs = FakeRuns()
+    llm = SchemaLlm(answers(PlanDraft=PlanDraft(ticker="NONE", quarters=4, tasks=PLAN.tasks)))
+    graph, ctx = setup(llm, runs=runs)
+    snap = await start(graph, ctx, "What's the weather?")
+    assert snap.values["status"] == "failed"
+    assert llm.calls == ["PlanDraft"]
+    assert runs.finished["run-test"]["status"] == "failed"
+
+
+async def test_spend_is_recorded_in_the_state():
+    llm = SchemaLlm(answers())
+    graph, ctx = setup(llm)
+    snap = await start(graph, ctx)
+    assert snap.values["spend"].llm_calls == len(llm.calls)  # PlanDraft, NewsDigest, Report, Judgement
 
 
 async def test_one_failed_researcher_does_not_stop_the_run():
-    llm = SchemaLlm({"PlanDraft": PLAN, "NewsDigest": LlmBadOutput("bad digest"), "Report": report_citing_first_metric})
-    state = await run_analysis("Analyze Apple", context(llm))
-    status = {f.task_id: f.status for f in state["findings"]}
-    assert status == {"t1": "ok", "t2": "failed"}
-    assert "report" in state
+    graph, ctx = setup(SchemaLlm(answers(NewsDigest=LlmBadOutput("bad digest"))))
+    snap = await start(graph, ctx)
+    assert {f.task_id: f.status for f in snap.values["findings"]} == {"t1": "ok", "t2": "failed"}
+    assert snap.next == ("human_review",)
 
 
-async def test_sec_access_denied_stops_the_whole_run():
-    llm = SchemaLlm({"PlanDraft": PLAN, "NewsDigest": DIGEST, "Report": report_citing_first_metric})
-    with pytest.raises(SecAccessDenied):
-        await run_analysis("Analyze Apple", context(llm, sec=FakeSec(facts=SecAccessDenied("403"))))
+# --- routing and shape ----------------------------------------------------------------------------------
 
-
-def test_router_sends_one_researcher_per_task():
+def test_routes():
     from research_analyst.state import Plan, ResearchTask
     tasks = [ResearchTask(id=f"t{i}", **t.model_dump()) for i, t in enumerate(PLAN.tasks, 1)]
     sends = route_after_planner({"plan": Plan(ticker="AAPL", company_name="Apple Inc.", cik=1, quarters=2, tasks=tasks)})
-    assert [(s.node, s.arg["task"].id, s.arg["quarters"]) for s in sends] == [("researcher", "t1", 2), ("researcher", "t2", 2)]
-    assert route_after_planner({}) == "__end__"
+    assert [(s.node, s.arg["task"].id) for s in sends] == [("researcher", "t1"), ("researcher", "t2")]
+    assert route_after_planner({}) == "finalize"
+    assert route_after_writer({}) == "finalize"
+    assert route_after_writer({"report": Report(title="t", summary="s", body_markdown="b")}) == "critic"
 
 
 def test_graph_shape():
     nodes = set(build_graph().get_graph().nodes)
-    assert {"planner", "researcher", "calculator", "writer"} <= nodes
-
-
-async def test_recursion_limit_comes_from_settings(monkeypatch):
-    seen = {}
-    real = build_graph()
-
-    class Spy:
-        def astream(self, *args, **kwargs):
-            seen.update(kwargs["config"])
-            return real.astream(*args, **kwargs)
-
-    monkeypatch.setattr("research_analyst.graph.build_graph", lambda: Spy())
-    llm = SchemaLlm({"PlanDraft": PlanDraft(ticker="NONE", quarters=4, tasks=PLAN.tasks)})
-    await run_analysis("x", context(llm))
-    assert seen["recursion_limit"] == SETTINGS.graph_recursion_limit
-
-
-# --- the CLI -----------------------------------------------------------------------------------
-
-def test_render_report_lists_cited_numbers_and_sources():
-    from research_analyst.finance.metrics import MetricResult
-    metric = MetricResult(name="revenue_yoy_growth", period_label="Q3 FY2026", period_end=date(2026, 6, 27),
-                          value=0.164, unit="ratio", formula="(109.42B - 94.04B) / 94.04B", inputs=())
-    unused = metric.model_copy(update={"name": "net_margin"})
-    state = {
-        "report": Report(title="Apple", summary="Strong quarter.", body_markdown="Revenue grew +16.4% [m1].",
-                         claims=[Claim(text="x", kind="numeric", metric_id="m1", stated_value=16.4)]),
-        "metrics": {"m1": metric, "m2": unused},
-        "findings": [Finding(task_id="t1", topic="News", status="ok", summary="s", sources=[
-            Source(kind="8-K", accession="0000320193-26-000018", filed=date(2026, 7, 30), url="https://sec.gov/x", description="New CEO"),
-        ])],
-    }
-    md = cli.render_report(state)
-    assert md.startswith("# Apple\n\nStrong quarter.")
-    assert "| m1 | revenue_yoy_growth | Q3 FY2026 | +16.4% | (109.42B - 94.04B) / 94.04B |" in md
-    assert "net_margin" not in md  # only numbers the report actually cites
-    assert "- 2026-07-30 8-K: New CEO (0000320193-26-000018) https://sec.gov/x" in md
-    assert "Not investment advice" in md
-
-
-def test_cli_prints_report_and_saves_it(monkeypatch, tmp_path, capsys):
-    state = {"report": Report(title="Apple", summary="s", body_markdown="b"), "errors": ["minor problem"]}
-
-    async def fake_run(request, settings):
-        from research_analyst.core.llm import Llm
-        return state, Llm(settings, client=object())
-
-    monkeypatch.setattr(cli, "get_settings", lambda: SETTINGS)
-    monkeypatch.setattr(cli, "_run", fake_run)
-    out_file = tmp_path / "apple.md"
-    assert cli.main(["Analyze Apple", "-o", str(out_file)]) == 0
-    captured = capsys.readouterr()
-    assert captured.out.startswith("# Apple")
-    assert "! minor problem" in captured.err      # problems go to stderr, the report to stdout
-    assert out_file.read_text().startswith("# Apple")
-
-
-def test_cli_exit_code_1_without_report(monkeypatch, capsys):
-    async def fake_run(request, settings):
-        from research_analyst.core.llm import Llm
-        return {"errors": ["I can analyze one US-listed public company per request."]}, Llm(settings, client=object())
-
-    monkeypatch.setattr(cli, "get_settings", lambda: SETTINGS)
-    monkeypatch.setattr(cli, "_run", fake_run)
-    assert cli.main(["weather?"]) == 1
-    assert "one US-listed" in capsys.readouterr().err
-
-
-def test_cli_config_error_exit_code_2(monkeypatch, capsys):
-    def broken():
-        return Settings(_env_file=None, gcp_project="p", sec_user_agent="no-email")
-
-    monkeypatch.setattr(cli, "get_settings", broken)
-    assert cli.main(["Analyze Apple"]) == 2
-    assert "Configuration error" in capsys.readouterr().err
-
-
-def test_cli_sec_block_is_a_clear_message(monkeypatch, capsys):
-    async def fake_run(request, settings):
-        raise SecAccessDenied("SEC refused access (403)")
-
-    monkeypatch.setattr(cli, "get_settings", lambda: SETTINGS)
-    monkeypatch.setattr(cli, "_run", fake_run)
-    assert cli.main(["Analyze Apple"]) == 1
-    assert "SEC refused access" in capsys.readouterr().err
+    assert {"planner", "researcher", "calculator", "writer", "critic", "human_review", "finalize"} <= nodes

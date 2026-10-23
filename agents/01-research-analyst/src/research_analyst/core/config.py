@@ -4,7 +4,7 @@ import re
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Compiled once when the module loads, not on every validation
@@ -50,6 +50,22 @@ class Settings(BaseSettings):
     researcher_max_tool_calls: int = Field(default=8, ge=1, le=25)  # caps one researcher's tool loop
     graph_recursion_limit: int = Field(default=50, ge=10, le=500)  # LangGraph's last-resort step limit
 
+    # Persistence (v1): LangGraph checkpoints + our runs table
+    database_url: str = "postgresql://agent:agent@localhost:5434/research_analyst"
+    db_pool_max_size: int = Field(default=5, ge=1, le=50)
+
+    # Quality loop (v1)
+    critic_model: str = "gemini-3-flash-preview"  # judges qualitative claims; numbers are checked by code
+    critic_max_revisions: int = Field(default=2, ge=0, le=5)  # critic -> writer loops per review round
+    review_max_revisions: int = Field(default=3, ge=0, le=10)  # human "revise" rounds per run
+
+    # Budget per run (v1). Tokens and calls are exact; USD is an estimate from model_prices.
+    budget_max_tokens: int = Field(default=150_000, gt=0)
+    budget_max_llm_calls: int = Field(default=20, gt=0)
+    budget_max_seconds: int = Field(default=600, gt=0)  # per working session; time paused for review doesn't count
+    budget_max_usd: float | None = Field(default=None, gt=0)  # set it only together with model_prices
+    model_prices: dict[str, tuple[float, float]] = {}  # model -> (USD per 1M input tokens, per 1M output tokens)
+
     @field_validator("sec_user_agent")
     @classmethod
     def _sec_contact(cls, v: str) -> str:
@@ -62,6 +78,17 @@ class Settings(BaseSettings):
         if not v.replace(email.group(), "").strip():
             raise ValueError("SEC_USER_AGENT must include an app name before the email")
         return v
+
+
+    @model_validator(mode="after")
+    def _prices_for_usd_budget(self) -> "Settings":
+        """A USD limit needs a price for every model, or the estimate would silently be too low."""
+        if self.budget_max_usd is not None:
+            models = {self.planner_model, self.researcher_model, self.writer_model, self.critic_model}
+            missing = sorted(models - set(self.model_prices))
+            if missing:
+                raise ValueError(f"BUDGET_MAX_USD is set but MODEL_PRICES has no price for: {missing}")
+        return self
 
 
 @lru_cache

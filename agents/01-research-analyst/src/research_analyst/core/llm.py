@@ -6,16 +6,18 @@ Every LLM call in the project goes through Llm.structured(). It:
   - if invalid: shows the model its own answer + the validation error, once, and asks for a fix,
   - retries temporary API failures (429/5xx) with backoff,
   - turns every other failure into one clear LlmError subclass,
-  - counts tokens, so v1 can enforce a budget.
+  - counts tokens and enforces the run's budget BEFORE every call (BudgetExceeded instead of spending).
 """
 
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from google import genai
 from google.genai import errors, types
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from research_analyst.core.config import Settings
 
@@ -51,6 +53,40 @@ class LlmBadOutput(LlmError):
     """The answer still didn't match the schema after the repair attempt."""
 
 
+class BudgetExceeded(LlmError):
+    """The run's budget (tokens, calls, USD or time) is used up. Raised before the call, so nothing is spent."""
+
+
+class Spend(BaseModel):
+    """What a run has spent so far. Stored in the graph state, so it survives crashes and resumes."""
+
+    model_config = ConfigDict(frozen=True)
+
+    llm_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    usd: float = 0.0  # estimate from Settings.model_prices; 0 when prices aren't configured
+
+    @property
+    def tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+
+def max_spend(current: Spend | None, new: Spend | None) -> Spend:
+    """Reducer for state["spend"]: every node reports the run's running total, so keep the largest.
+
+    Parallel researchers each report "total so far"; the max is the latest. Plain addition would
+    double-count, because each report already includes everything before it.
+    """
+    a, b = current or Spend(), new or Spend()
+    return Spend(
+        llm_calls=max(a.llm_calls, b.llm_calls),
+        input_tokens=max(a.input_tokens, b.input_tokens),
+        output_tokens=max(a.output_tokens, b.output_tokens),
+        usd=max(a.usd, b.usd),
+    )
+
+
 @dataclass
 class Usage:
     """Tokens used, per model. Output includes thinking tokens: both are billed as output."""
@@ -69,10 +105,15 @@ class Usage:
 
 
 class Llm:
-    """One per run. Holds the Gemini client and the run's token usage."""
+    """One per working session of a run. Holds the Gemini client, the usage, and the budget."""
 
-    def __init__(self, settings: Settings, *, client: genai.Client | None = None) -> None:
+    def __init__(self, settings: Settings, *, client: genai.Client | None = None,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         self._max_output_tokens = settings.llm_max_output_tokens
+        self._settings = settings
+        self._clock = clock
+        self._deadline = clock() + settings.budget_max_seconds
+        self._baseline = Spend()  # what earlier sessions of this run spent (loaded from the checkpoint)
         self._client = client or genai.Client(
             vertexai=True,
             project=settings.gcp_project,
@@ -85,6 +126,36 @@ class Llm:
             ),
         )
         self.usage = Usage()
+
+    def set_baseline(self, spent: Spend | None) -> None:
+        """Continue a run: count what it already spent before this session (a crash or a review pause)."""
+        self._baseline = spent or Spend()
+
+    def spend(self) -> Spend:
+        """The run's total so far: earlier sessions + this one."""
+        prices = self._settings.model_prices
+        usd = sum(
+            self.usage.input_tokens.get(m, 0) / 1e6 * price_in + self.usage.output_tokens.get(m, 0) / 1e6 * price_out
+            for m, (price_in, price_out) in prices.items()
+        )
+        b = self._baseline
+        return Spend(
+            llm_calls=b.llm_calls + self.usage.calls,
+            input_tokens=b.input_tokens + sum(self.usage.input_tokens.values()),
+            output_tokens=b.output_tokens + sum(self.usage.output_tokens.values()),
+            usd=round(b.usd + usd, 6),
+        )
+
+    def _check_budget(self) -> None:
+        s, cfg = self.spend(), self._settings
+        if s.llm_calls >= cfg.budget_max_llm_calls:
+            raise BudgetExceeded(f"LLM call limit reached ({s.llm_calls} of {cfg.budget_max_llm_calls})")
+        if s.tokens >= cfg.budget_max_tokens:
+            raise BudgetExceeded(f"token limit reached ({s.tokens:,} of {cfg.budget_max_tokens:,})")
+        if cfg.budget_max_usd is not None and s.usd >= cfg.budget_max_usd:
+            raise BudgetExceeded(f"cost limit reached (about ${s.usd:.2f} of ${cfg.budget_max_usd:.2f})")
+        if self._clock() > self._deadline:
+            raise BudgetExceeded(f"time limit reached ({cfg.budget_max_seconds}s for this session)")
 
     async def structured(self, *, model: str, system: str, prompt: str, schema: type[T], repair: int = 1,
                          context: dict[str, Any] | None = None, max_output_tokens: int | None = None) -> T:
@@ -124,6 +195,7 @@ class Llm:
 
     async def _generate(self, model: str, contents: list[types.Content], config: types.GenerateContentConfig,
                         limit: int) -> str:
+        self._check_budget()  # before every call, repairs included
         try:
             response = await self._client.aio.models.generate_content(model=model, contents=contents, config=config)
         except errors.APIError as e:
